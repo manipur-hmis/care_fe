@@ -20,12 +20,48 @@ import {
   SchedulableResourceType,
 } from "@/types/scheduling/schedule";
 
-import { renderTokenNumber, TokenRead } from "@/types/tokens/token/token";
+import { PatientIDScanDialog } from "@/components/Scan/PatientIDScanDialog";
+import patientApi from "@/types/emr/patient/patientApi";
+import scheduleApi from "@/types/scheduling/scheduleApi";
+import { renderTokenNumber } from "@/types/tokens/token/token";
 import mutate from "@/Utils/request/mutate";
+import query from "@/Utils/request/query";
+import { dateQueryString } from "@/Utils/utils";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ExternalLinkIcon } from "lucide-react";
-import { Link } from "raviger";
+import {
+  CalendarCheck,
+  CalendarRange,
+  ChevronDown,
+  ExternalLinkIcon,
+  ListOrdered,
+  ScanLine,
+} from "lucide-react";
+import { Link, navigate } from "raviger";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
+
+/**
+ * Get the appointments page link for an appointment based on resource type.
+ * - Practitioner: /facility/{facilityId}/appointments?practitioners={resourceId}&date_from={date}&date_to={date}
+ * - Location: /facility/{facilityId}/locations/{resourceId}/appointments?date_from={date}&date_to={date}
+ * - HealthcareService: /facility/{facilityId}/services/{resourceId}/appointments?date_from={date}&date_to={date}
+ */
+const getQueueLink = (appointment: AppointmentRead): string => {
+  const facilityId = appointment.facility.id;
+  const resourceId = appointment.resource.id;
+  const date = dateQueryString(new Date(appointment.token_slot.start_datetime));
+  const dateParams = `date_from=${date}&date_to=${date}`;
+
+  switch (appointment.resource_type) {
+    case SchedulableResourceType.Practitioner:
+      return `/facility/${facilityId}/appointments?practitioners=${resourceId}&${dateParams}`;
+    case SchedulableResourceType.Location:
+      return `/facility/${facilityId}/locations/${resourceId}/appointments?${dateParams}`;
+    case SchedulableResourceType.HealthcareService:
+      return `/facility/${facilityId}/services/${resourceId}/appointments?${dateParams}`;
+  }
+};
 
 const getOptions = (encounter: EncounterRead) => {
   const options: ("close_appointment" | "mark_as_complete")[] = [];
@@ -48,6 +84,91 @@ const getOptions = (encounter: EncounterRead) => {
   return options;
 };
 
+const PatientScanButton = ({
+  facilityId,
+  appointment,
+}: {
+  facilityId: string;
+  appointment: AppointmentRead;
+}) => {
+  const { t } = useTranslation();
+  const [scanDialogOpen, setScanDialogOpen] = useState(false);
+
+  const { mutate: checkPatientAppointments, isPending } = useMutation({
+    mutationFn: async (patientId: string) => {
+      const today = dateQueryString(new Date());
+      const controller = new AbortController();
+
+      const [appointments, patient] = await Promise.all([
+        query(scheduleApi.appointments.list, {
+          pathParams: { facilityId },
+          queryParams: {
+            status: [
+              AppointmentStatus.BOOKED,
+              AppointmentStatus.CHECKED_IN,
+              AppointmentStatus.IN_CONSULTATION,
+            ].join(","),
+            resource_type: appointment.resource_type,
+            resource_ids: appointment.resource.id,
+            date_after: today,
+            date_before: today,
+            patient: patientId,
+          },
+        })({ signal: controller.signal }),
+        query(patientApi.get, {
+          silent: true,
+          pathParams: { id: patientId },
+        })({ signal: controller.signal }),
+      ]);
+
+      return { appointments, patient, patientId };
+    },
+    onSuccess: ({ appointments, patient, patientId }) => {
+      if (appointments.results?.length) {
+        navigate(
+          `/facility/${facilityId}/patient/${patientId}/appointments/${appointments.results[0].id}`,
+        );
+      } else {
+        toast.info(t("no_appointments_found_for_today"));
+        navigate(
+          `/facility/${facilityId}/patients/home?${new URLSearchParams({
+            phone_number: patient.phone_number,
+            year_of_birth: patient.year_of_birth?.toString() ?? "",
+            partial_id: patientId.slice(0, 5),
+          }).toString()}`,
+        );
+      }
+    },
+    onError: () => {
+      toast.error(t("failed_to_check_appointments"));
+    },
+  });
+
+  const handleScanSuccess = (patientId: string) => {
+    checkPatientAppointments(patientId);
+  };
+
+  return (
+    <div className="flex-1 flex items-center justify-center">
+      <Button
+        variant="ghost"
+        onClick={() => setScanDialogOpen(true)}
+        disabled={isPending}
+        aria-label={t("scan_qr")}
+        className="flex-col gap-0 size-auto sm:flex-row sm:gap-2"
+      >
+        <ScanLine className="size-4 text-black" />
+        <span className="text-sm text-black">{t("scan")}</span>
+      </Button>
+      <PatientIDScanDialog
+        open={scanDialogOpen}
+        onOpenChange={setScanDialogOpen}
+        onScanSuccess={handleScanSuccess}
+      />
+    </div>
+  );
+};
+
 export const AppointmentEncounterHeader = ({
   appointment,
   encounter,
@@ -58,25 +179,28 @@ export const AppointmentEncounterHeader = ({
   canWritePrimaryEncounter: boolean;
 }) => {
   return (
-    <div className="flex gap-3 border border-gray-300 rounded-lg py-1.5 px-2 bg-white sm:w-fit w-full items-center justify-center shadow-sm">
-      {appointment.token && (
-        <TokenActions
-          patientId={appointment.patient.id}
+    <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 border border-gray-300 rounded-lg py-1.5 px-2 bg-white sm:w-fit w-full sm:items-center items-stretch justify-center shadow-sm">
+      <div className="flex divide-x-2 items-stretch justify-evenly overflow-auto">
+        <PatientScanButton
           facilityId={encounter.facility.id}
-          appointmentId={appointment.id}
-          token={appointment.token}
+          appointment={appointment}
+        />
+        <TokenActions
+          patientId={encounter.patient.id}
+          facilityId={encounter.facility.id}
+          appointment={appointment}
           resourceType={appointment.resource_type}
           resourceId={appointment.resource.id}
         />
-      )}
-      <div className="flex sm:flex-row flex-col gap-2 sm:items-center items-start">
-        {canWritePrimaryEncounter && (
+      </div>
+      {canWritePrimaryEncounter && (
+        <div className="flex sm:flex-row flex-col gap-2 sm:items-center items-start">
           <AppointmentEncounterHeaderActions
             encounter={encounter}
             appointment={appointment}
           />
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -122,8 +246,8 @@ const AppointmentEncounterHeaderActions = ({
     return (
       <div
         className={cn(
-          "w-full sm:w-auto space-x-2",
-          appointment.token && "border-l border-gray-300 pl-2",
+          "w-full sm:w-auto space-x-2 text-center",
+          appointment.token && "sm:border-l-2 sm:pl-2",
         )}
       >
         <span className="text-sm text-black">
@@ -151,8 +275,8 @@ const AppointmentEncounterHeaderActions = ({
   return (
     <div
       className={cn(
-        "w-full sm:w-auto space-x-2",
-        appointment.token && "border-l border-gray-300 pl-2",
+        "w-full sm:w-auto space-x-2 text-center",
+        appointment.token && "sm:border-l-2 sm:pl-2",
       )}
     >
       <span className="text-sm text-black">
@@ -203,50 +327,94 @@ const AppointmentEncounterHeaderActions = ({
 const TokenActions = ({
   patientId,
   facilityId,
-  appointmentId,
-  token,
+  appointment,
   resourceType,
   resourceId,
 }: {
   patientId: string;
   facilityId: string;
-  appointmentId: string;
-  token: TokenRead;
+  appointment?: AppointmentRead;
   resourceType: SchedulableResourceType;
   resourceId: string;
 }) => {
   const { t } = useTranslation();
+
+  if (!appointment?.id && !appointment?.token) {
+    return null;
+  }
+
+  const { token } = appointment;
+
   return (
-    <div className="flex gap-2">
-      <div className="flex items-center justify-center border-r border-gray-300">
-        <Button variant="ghost" className="rounded-r-none pl-2 " asChild>
-          <Link
-            href={`/facility/${facilityId}/patient/${patientId}/appointments/${appointmentId}`}
+    <>
+      {appointment.id && (
+        <div className="flex-1 flex items-center justify-center">
+          <Button
+            variant="ghost"
+            asChild
+            className="flex-col gap-0 size-auto sm:flex-row sm:gap-2"
           >
-            <div className="flex sm:flex-row flex-col items-center justify-center sm:gap-1">
-              <span className="text-sm text-gray-600">{t("token")}:</span>
-              <div className="flex whitespace-nowrap gap-1 items-center">
-                <span className="text-sm text-black font-semibold underline ">
-                  {renderTokenNumber(token)}
-                </span>
-                <ExternalLinkIcon className="size-4 text-black" />
-              </div>
-            </div>
-          </Link>
-        </Button>
-      </div>
-      <div className="flex items-center justify-center">
-        <Button variant="link" className="underline ">
-          <Link
-            basePath="/"
-            className="flex items-center gap-1"
-            href={`/facility/${facilityId}/${resourceTypeToResourcePathSlug[resourceType]}/${resourceId}/queues/${token.queue.id}`}
+            <Link href={getQueueLink(appointment)}>
+              <CalendarRange className="size-4 text-black" />
+              <span className="text-sm text-black underline">{t("list")}</span>
+              <ExternalLinkIcon className="size-4 text-black hidden sm:block" />
+            </Link>
+          </Button>
+        </div>
+      )}
+      {appointment.id && (
+        <div className="flex-1 flex items-center justify-center">
+          <Button
+            variant="ghost"
+            asChild
+            className="flex-col gap-0 size-auto sm:flex-row sm:gap-2"
           >
-            {t("queue")}
-            <ExternalLinkIcon className="size-4 text-black" />
-          </Link>
-        </Button>
-      </div>
-    </div>
+            <Link
+              href={`/facility/${facilityId}/patient/${patientId}/appointments/${appointment.id}`}
+            >
+              <>
+                {token ? (
+                  <>
+                    <span className="text-xs sm:text-sm text-gray-600">
+                      {t("token")}:
+                    </span>
+                    <div className="flex whitespace-nowrap gap-1 items-center">
+                      <span className="text-sm text-black font-semibold underline">
+                        {renderTokenNumber(token)}
+                      </span>
+                      <ExternalLinkIcon className="size-4 text-black hidden sm:block" />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <CalendarCheck className="size-4 text-black" />
+                    <span className="text-black underline">{t("view")}</span>
+                    <ExternalLinkIcon className="size-4 text-black hidden sm:block" />
+                  </>
+                )}
+              </>
+            </Link>
+          </Button>
+        </div>
+      )}
+      {token && (
+        <div className="flex-1 flex items-center justify-center">
+          <Button
+            variant="ghost"
+            className="flex-col gap-0 size-auto sm:flex-row sm:gap-2"
+            asChild
+          >
+            <Link
+              basePath="/"
+              href={`/facility/${facilityId}/${resourceTypeToResourcePathSlug[resourceType]}/${resourceId}/queues/${token.queue.id}`}
+            >
+              <ListOrdered className="size-4 text-black" />
+              <span className="text-sm text-black underline">{t("queue")}</span>
+              <ExternalLinkIcon className="size-4 text-black hidden sm:block" />
+            </Link>
+          </Button>
+        </div>
+      )}
+    </>
   );
 };

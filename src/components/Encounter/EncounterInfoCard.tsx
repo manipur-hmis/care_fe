@@ -30,12 +30,18 @@ export interface EncounterInfoCardProps {
   encounter: EncounterListRead | EncounterRead;
   facilityId: string;
   hideBorder?: boolean;
+  disableHover?: boolean;
 }
 
 export default function EncounterInfoCard(props: EncounterInfoCardProps) {
   const { t } = useTranslation();
 
-  const { encounter, facilityId, hideBorder = false } = props;
+  const {
+    encounter,
+    facilityId,
+    hideBorder = false,
+    disableHover = false,
+  } = props;
 
   // Get encounter tags and handle overflow
   const encounterTags = encounter.tags || [];
@@ -47,8 +53,9 @@ export default function EncounterInfoCard(props: EncounterInfoCardProps) {
       data-status={encounter.status}
       key={props.encounter.id}
       className={cn(
-        "hover:shadow-lg transition-shadow group md:flex md:flex-col h-full overflow-hidden",
+        "md:flex md:flex-col h-full overflow-hidden",
         hideBorder && "border-none shadow-none",
+        !disableHover && "hover:shadow-lg transition-shadow group",
       )}
     >
       <CardHeader className="bg-gray-100 px-4 pt-2 pb-1">
@@ -148,7 +155,7 @@ export default function EncounterInfoCard(props: EncounterInfoCardProps) {
       <CardFooter className="flex justify-end items-center px-4 py-2 space-x-4 mt-auto">
         <Link
           basePath="/"
-          href={`/facility/${facilityId}/patients/verify?${new URLSearchParams({
+          href={`/facility/${facilityId}/patients/home?${new URLSearchParams({
             phone_number: encounter.patient.phone_number,
             year_of_birth: encounter.patient.year_of_birth?.toString() || "",
             partial_id: encounter.patient.id.slice(0, 5),

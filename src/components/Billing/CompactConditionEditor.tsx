@@ -34,12 +34,14 @@ import {
   Metrics,
   TagOperationValue,
 } from "@/types/base/condition/condition";
+import { ENCOUNTER_CLASS } from "@/types/emr/encounter/encounter";
 
 interface CompactConditionEditorProps {
   conditions: ConditionForm[];
   availableMetrics: Metrics[];
   onChange: (conditions: ConditionForm[]) => void;
   className?: string;
+  facilityId?: string;
 }
 
 // Keep only TagSelector as a separate component since it needs to use a hook
@@ -47,10 +49,12 @@ function TagSelector({
   value,
   onChange,
   resource,
+  facilityId,
 }: {
   value: TagOperationValue;
   onChange: (value: TagOperationValue) => void;
   resource: TagResource;
+  facilityId?: string;
 }) {
   const { tagIds } = extractTagInformation(value);
 
@@ -77,6 +81,7 @@ function TagSelector({
         resource={resource}
         onChange={handleChange}
         className="h-9 w-full"
+        facilityId={facilityId}
       />
     </div>
   );
@@ -86,10 +91,12 @@ function RenderInput({
   metric,
   operation,
   form,
+  facilityId,
 }: {
   metric: string;
   operation: ConditionOperation;
   form: UseFormReturn<ConditionForm, unknown, ConditionForm>;
+  facilityId?: string;
 }) {
   const { t } = useTranslation();
   // For patient_gender with equality operation
@@ -257,6 +264,41 @@ function RenderInput({
     );
   }
 
+  if (
+    metric === "encounter_class" &&
+    operation === ConditionOperation.equality
+  ) {
+    return (
+      <FormField
+        control={form.control}
+        name="value"
+        render={({ field }) => (
+          <FormItem className="flex-1">
+            <FormControl>
+              <Select
+                value={field.value as string}
+                onValueChange={(value) => {
+                  field.onChange(value);
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={t("select_a_value")} />
+                </SelectTrigger>
+                <SelectContent>
+                  {ENCOUNTER_CLASS.map((encounterClass) => (
+                    <SelectItem key={encounterClass} value={encounterClass}>
+                      {t(`encounter_class__${encounterClass}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormControl>
+          </FormItem>
+        )}
+      />
+    );
+  }
+
   // For has_tag operation
   if (operation === ConditionOperation.has_tag) {
     const tagResource =
@@ -274,6 +316,7 @@ function RenderInput({
                   field.onChange(value);
                 }}
                 resource={tagResource}
+                facilityId={facilityId}
               />
             </FormControl>
           </FormItem>
@@ -356,12 +399,12 @@ export function CompactConditionEditor({
   availableMetrics,
   onChange,
   className = "",
+  facilityId,
 }: CompactConditionEditorProps) {
   const { t } = useTranslation();
   const [isAdding, setIsAdding] = useState(false);
 
-  const metrics =
-    availableMetrics?.filter((m) => !m.name.includes("encounter_tag")) || [];
+  const metrics = availableMetrics || [];
 
   const defaultCondition = getDefaultCondition(metrics);
 
@@ -529,7 +572,12 @@ export function CompactConditionEditor({
                 )}
               />
 
-              <RenderInput metric={metric} operation={operation} form={form} />
+              <RenderInput
+                metric={metric}
+                operation={operation}
+                form={form}
+                facilityId={facilityId}
+              />
             </div>
             {/* Error Summary */}
             {Object.keys(form.formState.errors).length > 0 && (
