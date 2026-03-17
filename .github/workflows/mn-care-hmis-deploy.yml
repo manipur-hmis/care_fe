@@ -1,4 +1,4 @@
-name: Build and deploy CARE FE to GCS for Jharkhand HMIS
+name: Build and deploy CARE FE to GCS for Manipur HMIS
 
 on:
   push:
